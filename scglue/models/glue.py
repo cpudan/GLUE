@@ -553,6 +553,7 @@ class GLUETrainer(Trainer):
         data_val.prepare_shuffle(num_workers=config.ARRAY_SHUFFLE_NUM_WORKERS, random_seed=random_seed)
         graph.prepare_shuffle(num_workers=config.GRAPH_SHUFFLE_NUM_WORKERS, random_seed=random_seed)
 
+        raise RuntimeError("val_split", val_split, "data_train.size",data_train.size, "data_train.sizes", data_train.sizes, "data_val.size",data_val.size, "data_val.sizes", data_val.sizes)
         train_loader = ParallelDataLoader(
             DataLoader(
                 data_train, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=True,
