@@ -308,8 +308,6 @@ class GLUETrainer(Trainer):
         self.required_losses += ["dsc_loss", "vae_loss", "gen_loss"]
         self.earlystop_loss = "vae_loss"
 
-        raise RuntimeWarning("Confirming message pass", kwargs)
-
         self.lam_data = lam_data
         self.lam_kl = lam_kl
         self.lam_graph = lam_graph
