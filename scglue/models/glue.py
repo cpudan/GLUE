@@ -11,6 +11,7 @@ import ignite
 import torch
 import torch.distributions as D
 import torch.nn.functional as F
+from torch.utils.data import WeightedRandomSampler
 
 from ..num import normalize_edges
 from ..utils import config, logged
@@ -309,10 +310,15 @@ class GLUETrainer(Trainer):
         self.earlystop_loss = "vae_loss"
 
         if 'sample_weights' in kwargs:
-            self.sample_weights = kwargs['sample_weights'].copy()
+            self.sample_weights = kwargs['sample_weights'].clone()
             del kwargs['sample_weights']
         else:
             self.sample_weights = None
+        if 'n_samples' in kwargs:
+            self.n_samples = kwargs['n_samples']
+            del kwargs['n_samples']
+        else:
+            self.n_samples = None
 
         self.lam_data = lam_data
         self.lam_kl = lam_kl
@@ -557,14 +563,17 @@ class GLUETrainer(Trainer):
         data_val.prepare_shuffle(num_workers=config.ARRAY_SHUFFLE_NUM_WORKERS, random_seed=random_seed)
         graph.prepare_shuffle(num_workers=config.GRAPH_SHUFFLE_NUM_WORKERS, random_seed=random_seed)
 
-        #raise RuntimeError("val_split", val_split, "data_train.size",data_train.size, "data_train.sizes", data_train.sizes, "data_val.size",data_val.size, "data_val.sizes", data_val.sizes)
         if self.sample_weights is None:
             shuffle = True
-            sampler = lambda n: None
+            sampler = lambda n,idx: None
         else:
             shuffle = None
-            sampler = lambda n: torch.utils.data.WeightedRandomSampler(self.sample_weights, n, replacement=False, generator=torch.torch.Generator().manual_seed(random_seed))
-            train_loader = ParallelDataLoader(
+            sampler = lambda n,idx: WeightedRandomSampler(self.sample_weights[idx], n, replacement=True)
+
+        n_samples_val = data_val.size if self.n_samples is None else int(self.n_samples*val_split)
+        n_samples_train = data_train.size if self.n_samples is None else int(self.n_samples*(1-val_split)+0.5)
+
+        train_loader = ParallelDataLoader(
             DataLoader(
                 data_train, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=shuffle,
                 num_workers=config.DATALOADER_NUM_WORKERS,
@@ -572,7 +581,7 @@ class GLUETrainer(Trainer):
                 drop_last=len(data_train) > config.DATALOADER_FETCHES_PER_BATCH,
                 generator=torch.Generator().manual_seed(random_seed),
                 persistent_workers=False,
-                sampler = sampler(data_train.size)
+                sampler = sampler(n_samples_train, data_train.shuffle_idx[:,1])
             ),
             DataLoader(
                 graph, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=True,
@@ -591,7 +600,7 @@ class GLUETrainer(Trainer):
                 pin_memory=config.DATALOADER_PIN_MEMORY and not config.CPU_ONLY, drop_last=False,
                 generator=torch.Generator().manual_seed(random_seed),
                 persistent_workers=False,
-                sampler=sampler(data_val.size)
+                sampler=sampler(n_samples_val, data_val.shuffle_idx[:,1])
             ),
             DataLoader(
                 graph, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=True,
