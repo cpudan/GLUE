@@ -584,6 +584,7 @@ class GLUETrainer(Trainer):
         msk = data_val.shuffle_pmsk[:, 1]
         idx_val[msk] = data_val.data_idx[1].get_indexer(data_val.view_idx)[msk] + data_val.sizes[0]
 
+        print("Making loader")
         train_loader = ParallelDataLoader(
             DataLoader(
                 data_train, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=shuffle,
@@ -604,6 +605,10 @@ class GLUETrainer(Trainer):
             ),
             cycle_flags=[False, True]
         )
+
+        for x in train_loader(): 
+            stop
+        
         val_loader = ParallelDataLoader(
             DataLoader(
                 data_val, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=shuffle,
