@@ -568,10 +568,21 @@ class GLUETrainer(Trainer):
             sampler = lambda n,idx: None
         else:
             shuffle = None
-            sampler = lambda n,idx: WeightedRandomSampler(self.sample_weights[idx], n, replacement=True)
+            sampler = lambda n,idx: WeightedRandomSampler(self.sample_weights[idx].tolist(), n, replacement=False)
 
-        n_samples_val = data_val.size if self.n_samples is None else int(self.n_samples*val_split)
-        n_samples_train = data_train.size if self.n_samples is None else int(self.n_samples*(1-val_split)+0.5)
+        if self.n_samples is None:
+            n_samples_val = data_val.size
+            n_samples_train = data_train.size
+        else:
+            n_samples_val = int(self.n_samples*val_split)
+            n_samples_train = int(self.n_samples*(1-val_split)+0.5)
+        idx_train = data_train.data_idx[0].get_indexer(data_train.view_idx)
+        idx_val = data_val.data_idx[0].get_indexer(data_val.view_idx)
+        # TODO: Generalize this to work with more than 2 modalities. Need cumulative sum of previous sizes
+        msk = data_train.shuffle_pmsk[:, 1]
+        idx_train[msk] = data_train.data_idx[1].get_indexer(data_train.view_idx)[msk] + data_train.sizes[0]
+        msk = data_val.shuffle_pmsk[:, 1]
+        idx_val[msk] = data_val.data_idx[1].get_indexer(data_val.view_idx)[msk] + data_val.sizes[0]
 
         train_loader = ParallelDataLoader(
             DataLoader(
@@ -581,7 +592,7 @@ class GLUETrainer(Trainer):
                 drop_last=len(data_train) > config.DATALOADER_FETCHES_PER_BATCH,
                 generator=torch.Generator().manual_seed(random_seed),
                 persistent_workers=False,
-                sampler = sampler(n_samples_train, data_train.shuffle_idx[:,1])
+                sampler = sampler(n_samples_train, idx_train)
             ),
             DataLoader(
                 graph, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=True,
@@ -600,7 +611,7 @@ class GLUETrainer(Trainer):
                 pin_memory=config.DATALOADER_PIN_MEMORY and not config.CPU_ONLY, drop_last=False,
                 generator=torch.Generator().manual_seed(random_seed),
                 persistent_workers=False,
-                sampler=sampler(n_samples_val, data_val.shuffle_idx[:,1])
+                sampler=sampler(n_samples_val, idx_val)
             ),
             DataLoader(
                 graph, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=True,
