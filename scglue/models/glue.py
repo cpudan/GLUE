@@ -606,8 +606,8 @@ class GLUETrainer(Trainer):
             cycle_flags=[False, True]
         )
 
-        for x in train_loader(): 
-            stop
+        for x in train_loader: 
+            assert(x[0].shape[0] > 0)
         
         val_loader = ParallelDataLoader(
             DataLoader(
