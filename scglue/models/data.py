@@ -286,6 +286,369 @@ class ArrayDataset(Dataset):
                 subdatasets[i].shuffle_idx[j] = idx
         return subdatasets
 
+@logged
+class NewAnnDataset(torch.utils.data.Dataset):
+
+    r"""
+    Dataset for :class:`anndata.AnnData` objects WITHOUT partial pairing support.
+    Inherits directly from `torch.utils.data.Dataset`. See `AnnDatasetPaired` for partial pairing support.
+
+    Parameters
+    ----------
+    *adatas
+        An arbitrary number of configured :class:`anndata.AnnData` objects
+    data_configs
+        Data configurations, one per dataset
+    mode
+        Data mode, must be one of ``{"train", "eval"}``
+    getitem_size
+        Unitary fetch size for each __getitem__ call
+    """
+
+    def __init__(
+            self, adatas: List[AnnData], data_configs: List[DATA_CONFIG],
+            mode: str = "train"
+    ) -> None:
+        super().__init__()
+        if mode not in ("train", "eval"):
+            raise ValueError("Invalid `mode`!")
+        self.mode = mode
+        self.adatas = adatas
+        self.data_configs = data_configs
+
+    @property
+    def adatas(self) -> List[AnnData]:
+        r"""
+        Internal :class:`AnnData` objects
+        """
+        return self._adatas
+
+    @property
+    def data_configs(self) -> List[DATA_CONFIG]:
+        r"""
+        Data configuration for each dataset
+        """
+        return self._data_configs
+
+    @adatas.setter
+    def adatas(self, adatas: List[AnnData]) -> None:
+        self.sizes = [adata.shape[0] for adata in adatas]
+        if min(self.sizes) == 0:
+            raise ValueError("Empty dataset is not allowed!")
+        self._adatas = adatas
+
+    @data_configs.setter
+    def data_configs(self, data_configs: List[DATA_CONFIG]) -> None:
+        if len(data_configs) != len(self.adatas):
+            raise ValueError("Number of data configs must match the number of datasets!")
+        self.data_idx, self.extracted_data = self._extract_data(data_configs)
+        self.view_idx = pd.concat(
+            [data_idx.to_series() for data_idx in self.data_idx]
+        ).drop_duplicates().to_numpy()
+        self.size = self.view_idx.size
+        self._data_configs = data_configs
+
+    def __len__(self) -> int:
+        return self.size
+
+    def __getitem__(self, index: int) -> List[torch.Tensor]:
+        r"""
+        self.extracted_data looks like this: xuid, (x, xrep, xbch, xlbl, xdwt)
+        Where each of these variables is of length d and d=(number of modalities)
+
+        (incorrectly) Assuming all adatas have the same shape N
+        We want to index data linearly such that DataSet[i] is:
+          adatas[0][i] if 0 <= i < adatas[0].n_obs
+          adatas[1][i % N] if adatas[0].n_obs <= i < sum(adatas[:1].n_obs)
+          ...
+          adatas[n][i % N] if sum([adata.n_obs for adata in adatas[:(n-1)]]) <= i < sum(adatas[:n].n_obs)
+        """
+        # Find the right adata object to access and then access the correct element of that adata object
+        # Assumes a flat index of adata observations across adata objects
+        # Build array `breaks` that has the boundaries between adata objects in flat index
+        breaks = [0] + np.cumsum([adata.shape[0] for adata in self.adatas]).tolist()
+        if index >= breaks[-1]:
+            raise RuntimeError("Index provided out of bounds. Must be between 0 and", breaks[-1])
+
+        # i is which anndata object to use
+        # j (renamed adata_idx) is which index of that anndata object to use
+        adata_idx, i = 0, index
+        for j in range(len(breaks)-1):
+            if breaks[j] <= index < breaks[j+1]:
+                i = index - breaks[j]
+                adata_idx = j
+                break
+
+        items = [
+            torch.as_tensor(self._index_array(data[adata_idx],i))
+            for data in self.extracted_data # For each component of extracted_data object
+        ]
+
+        #shuffle_idx = []
+        #shuffle_pmsk = []
+        #xflag = self.extracted_data[-2]
+        #for i,m in enumerate(xflag):
+        #    shuffle_pmsk.append([j == m for j in range(len(self.adatas))])
+        #    shuffle_idx.append()
+
+        #shuffle_idx = np.stack(shuffle_idx, axis=1).T
+        #shuffle_pmsk = np.stack(shuffle_pmsk, axis=1)
+        #items = [
+        #    torch.as_tensor(self._index_array(data, idx))
+        #    for extracted_data in self.extracted_data
+        #    for idx, data in zip(shuffle_idx, extracted_data)
+        #]
+        #items.append(torch.as_tensor(shuffle_pmsk))
+        return items
+
+    # Dummy methods for compatibility with custom Dataset class
+    @property
+    def has_workers(self, *args, **kwargs):
+        return False
+    def prepare_shuffle(self, *args, **kwargs):
+        pass
+    def shuffle(self):
+        pass
+    def shuffle_worker(self):
+        pass
+    def propose_shuffle(self, *args, **kwargs):
+        pass
+    def accept_shuffle(self, *args, **kwargs):
+        pass
+    def clean(self):
+        pass
+
+    @staticmethod
+    def _index_array(arr: AnyArray, idx: int) -> np.ndarray:
+        arr = arr[idx]
+        return arr.toarray() if scipy.sparse.issparse(arr) else arr
+
+    def _extract_data(self, data_configs: List[DATA_CONFIG]) -> Tuple[
+        List[pd.Index], Tuple[
+            List[AnyArray], List[AnyArray], List[AnyArray],
+            List[AnyArray], List[AnyArray], List[AnyArray]
+        ]
+    ]:
+        if self.mode == "eval":
+            return self._extract_data_eval(data_configs)
+        return self._extract_data_train(data_configs)  # self.mode == "train"
+
+    def _extract_data_train(self, data_configs: List[DATA_CONFIG]) -> Tuple[
+        List[pd.Index], Tuple[
+            List[AnyArray], List[AnyArray], List[AnyArray],
+            List[AnyArray], List[AnyArray], List[AnyArray]
+        ]
+    ]:
+        xuid = [
+            self._extract_xuid(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        x = [
+            self._extract_x(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        xrep = [
+            self._extract_xrep(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        xbch = [
+            self._extract_xbch(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        xlbl = [
+            self._extract_xlbl(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        xdwt = [
+            self._extract_xdwt(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        xflag = [
+            np.zeros((adata.shape[0], 1), dtype=np.int64)
+            for adata in self.adatas
+        ]
+        return xuid, (x, xrep, xbch, xlbl, xflag, xdwt)
+
+    def _extract_data_eval(self, data_configs: List[DATA_CONFIG]) -> Tuple[
+        List[pd.Index], Tuple[
+            List[AnyArray], List[AnyArray], List[AnyArray],
+            List[AnyArray], List[AnyArray], List[AnyArray]
+        ]
+    ]:
+        default_dtype = get_default_numpy_dtype()
+        xuid = [
+            self._extract_xuid(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        xrep = [
+            self._extract_xrep(adata, data_config)
+            for adata, data_config in zip(self.adatas, data_configs)
+        ]
+        x = [
+            np.empty((adata.shape[0], 0), dtype=default_dtype)
+            if xrep_.size else self._extract_x(adata, data_config)
+            for adata, data_config, xrep_ in zip(self.adatas, data_configs, xrep)
+        ]
+        xbch = xlbl = [
+            np.empty((adata.shape[0], 0), dtype=int)
+            for adata in self.adatas
+        ]
+        xdwt = [
+            np.empty((adata.shape[0], 0), dtype=default_dtype)
+            for adata in self.adatas
+        ]
+        xflag = [
+            np.zeros((adata.shape[0], 1), dtype=np.int64)
+            for adata in self.adatas
+        ]
+        return xuid, (x, xrep, xbch, xlbl, xflag, xdwt)
+
+    def _extract_x(self, adata: AnnData, data_config: DATA_CONFIG) -> AnyArray:
+        default_dtype = get_default_numpy_dtype()
+        features = data_config["features"]
+        use_layer = data_config["use_layer"]
+        if not np.array_equal(adata.var_names, features):
+            adata = adata[:, features]  # This will load all data to memory if backed
+        if use_layer:
+            if use_layer not in adata.layers:
+                raise ValueError(
+                    f"Configured data layer '{use_layer}' "
+                    f"cannot be found in input data!"
+                )
+            x = adata.layers[use_layer]
+        else:
+            x = adata.X
+        if x.dtype.type is not default_dtype:
+            if isinstance(x, (h5py.Dataset, SparseDataset)):
+                raise RuntimeError(
+                    f"User is responsible for ensuring a {default_dtype} dtype "
+                    f"when using backed data!"
+                )
+            x = x.astype(default_dtype)
+        if scipy.sparse.issparse(x):
+            x = x.tocsr()
+        return x
+
+    def _extract_xrep(self, adata: AnnData, data_config: DATA_CONFIG) -> AnyArray:
+        r"""
+        Extract replicate information. Will return an empty array of shape (adata.shape[0],0) if no reps specified
+        """
+        default_dtype = get_default_numpy_dtype()
+        use_rep = data_config["use_rep"]
+        rep_dim = data_config["rep_dim"]
+        if use_rep:
+            if use_rep not in adata.obsm:
+                raise ValueError(
+                    f"Configured data representation '{use_rep}' "
+                    f"cannot be found in input data!"
+                )
+            xrep = np.asarray(adata.obsm[use_rep]).astype(default_dtype)
+            if xrep.shape[1] != rep_dim:
+                raise ValueError(
+                    f"Input representation dimensionality {xrep.shape[1]} "
+                    f"does not match the configured {rep_dim}!"
+                )
+            return xrep
+        return np.empty((adata.shape[0], 0), dtype=default_dtype)
+
+    def _extract_xbch(self, adata: AnnData, data_config: DATA_CONFIG) -> AnyArray:
+        r"""
+        Extract batches. Will return a vecotr of 0 values of adata.shape[0] if no batches specified
+        """
+        use_batch = data_config["use_batch"]
+        batches = data_config["batches"]
+        if use_batch:
+            if use_batch not in adata.obs:
+                raise ValueError(
+                    f"Configured data batch '{use_batch}' "
+                    f"cannot be found in input data!"
+                )
+            return batches.get_indexer(adata.obs[use_batch])
+        return np.zeros(adata.shape[0], dtype=int)
+
+    def _extract_xlbl(self, adata: AnnData, data_config: DATA_CONFIG) -> AnyArray:
+        r"""
+        Extract cell type labels. Will return vector of -1 values of adata.shape[0] if no cell type labels
+        """
+        use_cell_type = data_config["use_cell_type"]
+        cell_types = data_config["cell_types"]
+        if use_cell_type:
+            if use_cell_type not in adata.obs:
+                raise ValueError(
+                    f"Configured cell type '{use_cell_type}' "
+                    f"cannot be found in input data!"
+                )
+            return cell_types.get_indexer(adata.obs[use_cell_type])
+        return -np.ones(adata.shape[0], dtype=int)
+
+    def _extract_xdwt(self, adata: AnnData, data_config: DATA_CONFIG) -> AnyArray:
+        r"""
+        Extract discriminator weights. Will normalize values provided in adata.obs['use_dsc_weight'].
+         Will return vector of 1 values of adata.shape[0] if no weights provided
+        """
+        default_dtype = get_default_numpy_dtype()
+        use_dsc_weight = data_config["use_dsc_weight"]
+        if use_dsc_weight:
+            if use_dsc_weight not in adata.obs:
+                raise ValueError(
+                    f"Configured discriminator sample weight '{use_dsc_weight}' "
+                    f"cannot be found in input data!"
+                )
+            xdwt = adata.obs[use_dsc_weight].to_numpy().astype(default_dtype)
+            xdwt /= xdwt.sum() / xdwt.size
+        else:
+            xdwt = np.ones(adata.shape[0], dtype=default_dtype)
+        return xdwt
+
+    def _extract_xuid(self, adata: AnnData, data_config: DATA_CONFIG) -> pd.Index:
+        r"""
+        Extract obs_names as a pandas index provided that `data_config['use_obs_names']` is specified, otherwise will
+        generate random unique hexcodes per observation.
+        """
+        if data_config["use_obs_names"]:
+            xuid = adata.obs_names.to_numpy()
+        else:  # NOTE: Assuming random UUIDs never collapse with anything
+            self.logger.debug("Generating random xuid...")
+            xuid = np.array([uuid.uuid4().hex for _ in range(adata.shape[0])])
+        if len(set(xuid)) != xuid.size:
+            raise ValueError("Non-unique cell ID!")
+        return pd.Index(xuid)
+
+    def random_split(
+            self, fractions: List[float], random_state: RandomState = None
+    ) -> List["AnnDataset"]:
+        r"""
+        Randomly split the dataset into multiple subdatasets according to
+        given fractions.
+
+        Parameters
+        ----------
+        fractions
+            Fraction of each split
+        random_state
+            Random state
+
+        Returns
+        -------
+        subdatasets
+            A list of splitted subdatasets
+        """
+        if min(fractions) <= 0:
+            raise ValueError("Fractions should be greater than 0!")
+        if sum(fractions) != 1:
+            raise ValueError("Fractions do not sum to 1!")
+        rs = get_rs(random_state)
+        cum_frac = np.cumsum(fractions)
+        view_idx = rs.permutation(self.view_idx)
+        split_pos = np.round(cum_frac * view_idx.size).astype(int)
+        split_idx = np.split(view_idx, split_pos[:-1])  # Last pos produces an extra empty split
+        subdatasets = []
+        for idx in split_idx:
+            sub = copy.copy(self)
+            sub.view_idx = idx
+            sub.size = idx.size
+            subdatasets.append(sub)
+        return subdatasets
 
 @logged
 class AnnDataset(Dataset):
