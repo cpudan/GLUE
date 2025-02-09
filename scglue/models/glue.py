@@ -12,11 +12,13 @@ import torch
 import torch.distributions as D
 import torch.nn.functional as F
 from torch.utils.data import WeightedRandomSampler
+import pandas as pd
+import numpy as np
 
 from ..num import normalize_edges
 from ..utils import config, logged
 from .base import Trainer, TrainingPlugin
-from .data import ArrayDataset, DataLoader, GraphDataset, ParallelDataLoader
+from .data import ArrayDataset, AnnDataset, DataLoader, GraphDataset, ParallelDataLoader
 from .nn import autodevice
 from .plugins import EarlyStopping, LRScheduler, Tensorboard
 
@@ -491,7 +493,7 @@ class GLUETrainer(Trainer):
         return self.compute_losses(data, engine.state.epoch)
 
     def fit(  # pylint: disable=arguments-renamed
-            self, data: ArrayDataset,
+            self, data: AnnDataset,
             graph: GraphDataset, val_split: float = None,
             data_batch_size: int = None, graph_batch_size: int = None,
             align_burnin: int = None, safe_burnin: bool = True,
