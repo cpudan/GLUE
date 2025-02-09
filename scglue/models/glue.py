@@ -568,7 +568,7 @@ class GLUETrainer(Trainer):
             sampler = lambda n,idx: None
         else:
             shuffle = None
-            sampler = lambda n,idx: WeightedRandomSampler(self.sample_weights[idx].tolist(), n, replacement=False)
+            sampler = lambda n,idx: WeightedRandomSampler(self.sample_weights[idx], n, replacement=False)
 
         if self.n_samples is None:
             n_samples_val = data_val.size
@@ -576,13 +576,14 @@ class GLUETrainer(Trainer):
         else:
             n_samples_val = int(self.n_samples*val_split)
             n_samples_train = int(self.n_samples*(1-val_split)+0.5)
-        idx_train = data_train.data_idx[0].get_indexer(data_train.view_idx)
-        idx_val = data_val.data_idx[0].get_indexer(data_val.view_idx)
-        # TODO: Generalize this to work with more than 2 modalities. Need cumulative sum of previous sizes
-        msk = data_train.shuffle_pmsk[:, 1]
-        idx_train[msk] = data_train.data_idx[1].get_indexer(data_train.view_idx)[msk] + data_train.sizes[0]
-        msk = data_val.shuffle_pmsk[:, 1]
-        idx_val[msk] = data_val.data_idx[1].get_indexer(data_val.view_idx)[msk] + data_val.sizes[0]
+        idx_train = pd.Index(np.concatenate(data_train.data_idx)).get_indexer(data_train.view_idx)
+        idx_val = pd.Index(np.concatenate(data_val.data_idx)).get_indexer(data_val.view_idx)
+        if not (data_train.size == len(idx_train) == data.size*(1-val_split)):
+            raise RuntimeError("data_train size doesn't match idx_train")
+        if not (data_val.size == len(idx_val) == data.size*val_split):
+            raise RuntimeError("data_val size doesn't match idx_val")
+        if not (data.size == sum([adata.n_obs for adata in data.adatas])):
+            raise RuntimeError("data.size does not equal sum of n_obs of adatas")
 
         print("Making loader")
         train_loader = ParallelDataLoader(
