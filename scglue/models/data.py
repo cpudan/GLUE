@@ -678,6 +678,8 @@ class AnnDataset(Dataset):
         self.mode = mode
         self.adatas = adatas
         self.data_configs = data_configs
+        self.sampler = None
+        self.n_samples = None
 
     @property
     def adatas(self) -> List[AnnData]:
@@ -715,6 +717,15 @@ class AnnDataset(Dataset):
         self.shuffle_idx, self.shuffle_pmsk = self._get_idx_pmsk(self.view_idx)
         self._data_configs = data_configs
 
+    def set_weights(self, sample_weights : torch.Tensor, n_samples):
+        if (sample_weights == 0).any().item():
+            self.logger.warning("Setting some weights are set to 0")
+        if (sample_weights < 0).any().item() | sample_weights.isnan().any().item():
+            raise ValueError("Some weights provided are less than 0 or NaN")
+        self.n_samples = min(n_samples, self.view_idx.size)
+        self.sampler = torch.utils.data.WeightedRandomSampler(sample_weights, self.n_samples, replacement=False)
+        self.size = self.n_samples
+
     def _get_idx_pmsk(
             self, view_idx: np.ndarray, random_fill: bool = False,
             random_state: RandomState = None
@@ -722,14 +733,21 @@ class AnnDataset(Dataset):
         rs = get_rs(random_state) if random_fill else None
         shuffle_idx, shuffle_pmsk = [], []
         for data_idx in self.data_idx:
+            # data_idx is the index of observations for each data modality
             idx = data_idx.get_indexer(view_idx)
-            pmsk = idx >= 0
-            n_true = pmsk.sum()
-            n_false = pmsk.size - n_true
+            pmsk = idx >= 0 # pmsk is True when obs is in this modality, False otherwise
+            n_true = pmsk.sum() # number of samples in this modality
+            n_false = pmsk.size - n_true # number of samples not in this modality
+
+            # For observations not in this modality
+            # if random_fill=True then assign idx to random observations from this modality when pmsk is False
+            # otherwise fill in sequentially with observations from this modality, looping whenever hitting end
             idx[~pmsk] = rs.choice(idx[pmsk], n_false, replace=True) \
                 if random_fill else idx[pmsk][np.mod(np.arange(n_false), n_true)]
             shuffle_idx.append(idx)
             shuffle_pmsk.append(pmsk)
+        # shuffle_idx and shuffle_pmsk have m=len(self.adatas) elements
+        # resulting shape for both is self.size*m
         return np.stack(shuffle_idx, axis=1), np.stack(shuffle_pmsk, axis=1)
 
     def __len__(self) -> int:
@@ -929,8 +947,16 @@ class AnnDataset(Dataset):
 
     def propose_shuffle(self, seed: int) -> Tuple[np.ndarray, np.ndarray]:
         rs = get_rs(seed)
-        view_idx = rs.permutation(self.view_idx)
-        return self._get_idx_pmsk(view_idx, random_fill=True, random_state=rs)
+        if self.sampler is not None:
+            view_idx = np.array([self.view_idx[i] for i in iter(self.sampler)])
+        else:
+            view_idx = rs.permutation(self.view_idx)
+        shuffle_idx, shuffle_pmsk = self._get_idx_pmsk(view_idx, random_fill=True, random_state=rs)
+        modality_rep = shuffle_pmsk.sum(axis=0)
+        if (modality_rep <= 1).any():
+            self.logger.warning(f"BAD CLASS BALANCE: shuffle_idx.shape={shuffle_idx.shape}, Number of cells per class in shuffled index: {str(shuffle_pmsk.sum(axis=0))}")
+        #self.logger.warning(f"shuffle_idx.shape={shuffle_idx.shape}, Number of cells per class in shuffled index: {str(shuffle_pmsk.sum(axis=0))}")
+        return shuffle_idx, shuffle_pmsk
 
     def accept_shuffle(self, shuffled: Tuple[np.ndarray, np.ndarray]) -> None:
         self.shuffle_idx, self.shuffle_pmsk = shuffled

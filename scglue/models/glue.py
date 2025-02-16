@@ -312,7 +312,7 @@ class GLUETrainer(Trainer):
         self.earlystop_loss = "vae_loss"
 
         if 'sample_weights' in kwargs:
-            self.sample_weights = kwargs['sample_weights'].clone()
+            self.sample_weights = kwargs['sample_weights']
             del kwargs['sample_weights']
         else:
             self.sample_weights = None
@@ -565,19 +565,7 @@ class GLUETrainer(Trainer):
         data_val.prepare_shuffle(num_workers=config.ARRAY_SHUFFLE_NUM_WORKERS, random_seed=random_seed)
         graph.prepare_shuffle(num_workers=config.GRAPH_SHUFFLE_NUM_WORKERS, random_seed=random_seed)
 
-        if self.sample_weights is None:
-            shuffle = True
-            sampler = lambda n,idx: None
-        else:
-            shuffle = None
-            sampler = lambda n,idx: WeightedRandomSampler(self.sample_weights[idx], n, replacement=False)
-
-        if self.n_samples is None:
-            n_samples_val = data_val.size
-            n_samples_train = data_train.size
-        else:
-            n_samples_val = int(self.n_samples*val_split)
-            n_samples_train = int(self.n_samples*(1-val_split)+0.5)
+        shuffle = True
         idx_train = pd.Index(np.concatenate(data_train.data_idx)).get_indexer(data_train.view_idx)
         idx_val = pd.Index(np.concatenate(data_val.data_idx)).get_indexer(data_val.view_idx)
         if not (data_train.size == len(idx_train) == data.size*(1-val_split)):
@@ -587,6 +575,19 @@ class GLUETrainer(Trainer):
         if not (data.size == sum([adata.n_obs for adata in data.adatas])):
             raise RuntimeError("data.size does not equal sum of n_obs of adatas")
 
+        if self.n_samples is None:
+            if self.sample_weights is not None:
+                raise RuntimeError("Must provide n_samples if sample_weights is specified")
+            n_samples_val = data_val.size
+            n_samples_train = data_train.size
+        else:
+            if self.sample_weights is None:
+                raise RuntimeError("Must provide sample_weights if n_samples is specified")
+            n_samples_val = int(self.n_samples*val_split)
+            n_samples_train = int(self.n_samples*(1-val_split)+0.5)
+            data_train.set_weights(self.sample_weights[idx_train], n_samples_train)
+            data_val.set_weights(self.sample_weights[idx_val], n_samples_val)
+
         print("Making loader")
         train_loader = ParallelDataLoader(
             DataLoader(
@@ -595,8 +596,7 @@ class GLUETrainer(Trainer):
                 pin_memory=config.DATALOADER_PIN_MEMORY and not config.CPU_ONLY,
                 drop_last=len(data_train) > config.DATALOADER_FETCHES_PER_BATCH,
                 generator=torch.Generator().manual_seed(random_seed),
-                persistent_workers=False,
-                sampler = sampler(n_samples_train, idx_train)
+                persistent_workers=False
             ),
             DataLoader(
                 graph, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=True,
@@ -618,8 +618,7 @@ class GLUETrainer(Trainer):
                 num_workers=config.DATALOADER_NUM_WORKERS,
                 pin_memory=config.DATALOADER_PIN_MEMORY and not config.CPU_ONLY, drop_last=False,
                 generator=torch.Generator().manual_seed(random_seed),
-                persistent_workers=False,
-                sampler=sampler(n_samples_val, idx_val)
+                persistent_workers=False
             ),
             DataLoader(
                 graph, batch_size=config.DATALOADER_FETCHES_PER_BATCH, shuffle=True,
