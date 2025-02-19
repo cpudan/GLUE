@@ -150,7 +150,8 @@ def load_model(fname: os.PathLike) -> Model:
 def fit_SCGLUE(
         adatas: Mapping[str, AnnData], graph: nx.Graph, model: type = SCGLUEModel,
         init_kws: Kws = None, compile_kws: Kws = None, fit_kws: Kws = None,
-        balance_kws: Kws = None
+        balance_kws: Kws = None,
+        estimate_balance = True
 ) -> SCGLUEModel:
     r"""
     Fit GLUE model to integrate single-cell multi-omics data
@@ -181,6 +182,8 @@ def fit_SCGLUE(
     balance_kws
         Balancing weight estimation keyword arguments
         (see :func:`scglue.data.estimate_balancing_weight`)
+    estimate_balance
+        Enable or disable automatic unsupervised estimation of balance weights when config["use_dsc_weight"] not set
 
     Returns
     -------
@@ -207,9 +210,6 @@ def fit_SCGLUE(
     if "directory" in pretrain_fit_kws:
         pretrain.save(os.path.join(pretrain_fit_kws["directory"], "pretrain.dill"))
 
-    fit_SCGLUE.logger.info("Estimating balancing weight...")
-    for k, adata in adatas.items():
-        adata.obsm[f"X_{config.TMP_PREFIX}"] = pretrain.encode_data(k, adata)
     if init_kws.get("shared_batches"):
         use_batch = set(
             adata.uns[config.ANNDATA_KEY]["use_batch"]
@@ -218,13 +218,18 @@ def fit_SCGLUE(
         use_batch = use_batch.pop() if len(use_batch) == 1 else None
     else:
         use_batch = None
-    estimate_balancing_weight(
-        *adatas.values(), use_rep=f"X_{config.TMP_PREFIX}", use_batch=use_batch,
-        key_added="balancing_weight", **balance_kws
-    )
-    for adata in adatas.values():
-        adata.uns[config.ANNDATA_KEY]["use_dsc_weight"] = "balancing_weight"
-        del adata.obsm[f"X_{config.TMP_PREFIX}"]
+
+    if estimate_balance:
+        fit_SCGLUE.logger.info("Estimating balancing weight...")
+        for k, adata in adatas.items():
+            adata.obsm[f"X_{config.TMP_PREFIX}"] = pretrain.encode_data(k, adata)
+        estimate_balancing_weight(
+            *adatas.values(), use_rep=f"X_{config.TMP_PREFIX}", use_batch=use_batch,
+            key_added="balancing_weight", **balance_kws
+        )
+        for adata in adatas.values():
+            adata.uns[config.ANNDATA_KEY]["use_dsc_weight"] = "balancing_weight"
+            del adata.obsm[f"X_{config.TMP_PREFIX}"]
 
     fit_SCGLUE.logger.info("Fine-tuning SCGLUE model...")
     finetune_fit_kws = fit_kws.copy()
@@ -235,7 +240,7 @@ def fit_SCGLUE(
     finetune = model(adatas, sorted(graph.nodes), **init_kws)
     finetune.adopt_pretrained_model(pretrain)
     finetune.compile(**compile_kws)
-    fit_SCGLUE.logger.debug("Increasing random seed by 1 to prevent idential data order...")
+    fit_SCGLUE.logger.debug("Increasing random seed by 1 to prevent identical data order...")
     finetune.random_seed += 1
     finetune.fit(adatas, graph, **finetune_fit_kws)
     if "directory" in finetune_fit_kws:

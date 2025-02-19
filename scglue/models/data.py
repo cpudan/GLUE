@@ -680,6 +680,7 @@ class AnnDataset(Dataset):
         self.data_configs = data_configs
         self.sampler = None
         self.n_samples = None
+        self.sample_weights = None
 
     @property
     def adatas(self) -> List[AnnData]:
@@ -722,6 +723,7 @@ class AnnDataset(Dataset):
             self.logger.warning("Setting some weights are set to 0")
         if (sample_weights < 0).any().item() | sample_weights.isnan().any().item():
             raise ValueError("Some weights provided are less than 0 or NaN")
+        self.sample_weights = sample_weights
         self.n_samples = min(n_samples, self.view_idx.size)
         self.sampler = torch.utils.data.WeightedRandomSampler(sample_weights, self.n_samples, replacement=False)
         self.size = self.n_samples
@@ -948,9 +950,14 @@ class AnnDataset(Dataset):
     def propose_shuffle(self, seed: int) -> Tuple[np.ndarray, np.ndarray]:
         rs = get_rs(seed)
         if self.sampler is not None:
+            # Update sampler
+            rg = torch.Generator()
+            rg.manual_seed(seed)
+            self.sampler = torch.utils.data.WeightedRandomSampler(self.sample_weights, self.n_samples, replacement=False, generator=rg)
             view_idx = np.array([self.view_idx[i] for i in iter(self.sampler)])
         else:
             view_idx = rs.permutation(self.view_idx)
+        # TODO: get_idx_pmsk will throw an error if it gets 0 samples in view_idx from one of the modalities
         shuffle_idx, shuffle_pmsk = self._get_idx_pmsk(view_idx, random_fill=True, random_state=rs)
         modality_rep = shuffle_pmsk.sum(axis=0)
         if (modality_rep <= 1).any():
