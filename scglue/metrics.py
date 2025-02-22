@@ -1,7 +1,7 @@
 r"""
 Performance evaluation metrics
 """
-
+import warnings
 from typing import Tuple
 
 import numpy as np
@@ -248,7 +248,9 @@ def avg_silhouette_width_batch(
 
 def neighbor_conservation(
         x: np.ndarray, y: np.ndarray, batch: np.ndarray,
-        neighbor_frac: float = 0.01, **kwargs
+        neighbor_frac: float = 0.01,
+        k_override = None,
+        **kwargs
 ) -> float:
     r"""
     Neighbor conservation score
@@ -275,11 +277,22 @@ def neighbor_conservation(
         mask = batch == b
         x_, y_ = x[mask], y[mask]
         k = max(round(x.shape[0] * neighbor_frac), 1)
+        if k_override is not None:
+            k = k_override
+
+        # Set nearest neighbors to shape of data if smaller than k+1
+        nns = [min(x_.shape[0], k + 1),
+               min(y_.shape[0], k + 1)]
+        # Throw warning if k was too big
+        if x_.shape[0] < k + 1:
+            warnings.warn(f"Provided value for `k`={k} is too large for unintegrated data. Reducing to {nns[0]}")
+        if y_.shape[0] < k + 1:
+            warnings.warn(f"Provided value for `k`={k} is too large for integrated data. Reducing to {nns[1]}")
         nnx = sklearn.neighbors.NearestNeighbors(
-            n_neighbors=min(x_.shape[0], k + 1), **kwargs
+            n_neighbors=nns[0], **kwargs
         ).fit(x_).kneighbors_graph(x_)
         nny = sklearn.neighbors.NearestNeighbors(
-            n_neighbors=min(y_.shape[0], k + 1), **kwargs
+            n_neighbors=nns[1], **kwargs
         ).fit(y_).kneighbors_graph(y_)
         nnx.setdiag(0)  # Remove self
         nny.setdiag(0)  # Remove self
