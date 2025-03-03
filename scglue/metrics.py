@@ -285,9 +285,9 @@ def neighbor_conservation(
                min(y_.shape[0], k + 1)]
         # Throw warning if k was too big
         if x_.shape[0] < k + 1:
-            warnings.warn(f"Provided value for `k`={k} is too large for unintegrated data. Reducing to {nns[0]}")
+            warnings.warn(f"Provided value for `k`={k} is too large for integrated data. Reducing to {nns[0]}")
         if y_.shape[0] < k + 1:
-            warnings.warn(f"Provided value for `k`={k} is too large for integrated data. Reducing to {nns[1]}")
+            warnings.warn(f"Provided value for `k`={k} is too large for unintegrated data. Reducing to {nns[1]}")
         nnx = sklearn.neighbors.NearestNeighbors(
             n_neighbors=nns[0], **kwargs
         ).fit(x_).kneighbors_graph(x_)
