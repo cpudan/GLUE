@@ -369,6 +369,7 @@ class GLUETrainer(Trainer):
         loss_dict
             Dict containing loss values
         """
+        raise RuntimeError("Check your Trainer's type")
         net = self.net
         x, xflag, eidx, ewt, esgn = data
 
