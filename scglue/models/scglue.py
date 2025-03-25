@@ -367,7 +367,7 @@ class SCGLUETrainer(GLUETrainer):
             self, engine: ignite.engine.Engine, data: List[torch.Tensor]
     ) -> Mapping[str, torch.Tensor]:
         self.net.train()
-        data = self.format_data(data)
+        data = self.format_data(data) # x, xrep, xbch, xlbl, xdwt, xflag, eidx, ewt, esgn
         epoch = engine.state.epoch
 
         if self.freeze_u:
