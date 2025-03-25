@@ -610,8 +610,13 @@ class GLUETrainer(Trainer):
             cycle_flags=[False, True]
         )
 
+        tmp1, tmp2 = 0, 0
         for x in train_loader: 
             assert(x[0].shape[0] > 0)
+            tmp1 += 1
+            tmp2 += x[0].shape[0]
+        print(tmp1, 'iterations of train_loader; ', tmp2, 'datapoints across these iterations; data_train.size:', data_train.size)
+        print('eyss')
         
         val_loader = ParallelDataLoader(
             DataLoader(
@@ -654,6 +659,14 @@ class GLUETrainer(Trainer):
                 directory=directory, plugins=plugins
             )
         finally:
+            # TODO: write out barcodes here
+            import random
+            import string
+            import pickle
+            randstring=''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+            with open(f"/home/dmeyer/GLUE-Species-Integration/results/{randstring}.pkl", "wb") as f:
+                pickle.dump({'train': data_train.barcodes,
+                             'val': data_val.barcodes}, f)
             data.clean()
             data_train.clean()
             data_val.clean()
