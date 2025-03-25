@@ -675,6 +675,7 @@ class AnnDataset(Dataset):
         super().__init__(getitem_size=getitem_size)
         if mode not in ("train", "eval"):
             raise ValueError("Invalid `mode`!")
+        self.barcodes = []
         self.mode = mode
         self.adatas = adatas
         self.data_configs = data_configs
@@ -768,6 +769,11 @@ class AnnDataset(Dataset):
             for idx, data in zip(shuffle_idx, extracted_data)
         ]
         items.append(torch.as_tensor(shuffle_pmsk))
+        ids = [didx[sidx]
+               for didx, sidx in zip(self.data_idx, shuffle_idx)]
+        for i,_ids in enumerate(ids):
+            self.barcodes.append([i] + _ids.tolist())
+
         return items
 
     @staticmethod
